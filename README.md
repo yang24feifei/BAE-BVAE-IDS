@@ -13,5 +13,5 @@ The usage process:
    For each dataset, there is a **-preprocess.ipynb file for preprocessing the data. Note that some file path need to be manully created.
 3. Do experiments.
    Experiments of AE and VAE are in the same file with different comment source code. The same as the BAE-relevance models.
-4. Summarized and plots data using plotsTool.ipynb.
+   
       
