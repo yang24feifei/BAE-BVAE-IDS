@@ -12,7 +12,6 @@ import os
 from sklearn.metrics import classification_report
 from sklearn.metrics import PrecisionRecallDisplay
 from sklearn import metrics
-from pyod.models.ecod import ECOD
 import copy
 #import heapq
 
@@ -663,8 +662,6 @@ def predict_UQ(predmodel,testdata,T, uqname='Kwon'):
     
     if uqname=='Kwon':
         aleatoric , epistemic = UQ_ale_epi_Kwon(test_recon)
-    elif uqname=='Kendall':
-        aleatoric , epistemic = UQ_ale_epi_Kendall(test_mu,test_std)
         
     return test_mu,test_std,test_recon, aleatoric, epistemic
 
