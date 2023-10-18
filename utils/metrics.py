@@ -16,17 +16,6 @@ from pyod.models.ecod import ECOD
 import copy
 #import heapq
 
-def getsortedindex(aa,bb):
-    # for total uncertainty=seq(alea)+seq(epis)
-    arraylen=len(aa)
-    seq_a=copy.deepcopy(aa)
-    seq_b=copy.deepcopy(bb)
-    sortedindex_a=np.argsort(aa)  # from small to big
-    sortedindex_b=np.argsort(bb)
-    for i in range(0,len(sortedindex_a)):
-        seq_a[sortedindex_a[i]]=i/(arraylen*2)
-        seq_b[sortedindex_b[i]]=i/(arraylen*2)
-    return seq_a+seq_b
 
 #plot the metrics(FP,TP,ROC,AUC)
 def rocauc(attackname,true_y, pre_y,plot=True):
@@ -159,7 +148,7 @@ def metric_GSS_gain(mdata,uncerdata,rejectiongroup):
         wgss=tempA/tempB
         gaingss=wgss-basegss
 '''          
-def plot_metrics(modelname,typename,ascores,unc_total,y_true,rej_max=60,step=3,folder='plots',plot=True):
+def plot_metrics(modelname,typename,ascores,unc_total,y_true,rej_max=60,step=3,folder='pplots',plot=True):
     ''' accuracy-rejection curve 
         rej_max: the max range of rejection rate
     '''    
@@ -369,31 +358,14 @@ def UQ_ale_epi_Kwon(mdata):
         # see https://github.com/ykwon0407/UQ_BNN/issues/1
         alea = np.mean(mdata*(1-np.absolute(mdata)), axis=1)
         epi = np.mean(mdata**2, axis=1) - np.mean(mdata, axis=1)**2 
+        epi=np.absolute(epi)    # sometimes epi<0
     else:
         alea = mdata*(1-np.absolute(mdata))   
-        epi =mdata**2 - np.mean(mdata)**2     
+        epi =mdata**2 - np.mean(mdata)**2    
+        epi=np.absolute(epi)     # sometimes epi<0 
         
     return alea,epi
 
-def UQ_ale_epi_Kendall(mu,std):
-    # Kendall and Gal(2017) 
-    # estimate uncertainties (eq. 4 )
-    # eq.4 in https://openreview.net/pdf?id=Sk_P2Q9sG
-    
-    # scale data
-    t = MinMaxScaler()
-    t.fit(mu)
-    mu = t.transform(mu)
-    t.fit(std)
-    std=t.transform(std)
-    
-    if mu.ndim>1:
-        alea = np.mean(std**2, axis=1)
-        epi = np.mean(mu**2, axis=1) - np.mean(mu, axis=1)**2
-    else:
-        alea =std**2
-        epi = mu**2- np.mean(mu)**2
-    return alea,epi
     
 # paper [27] , transfer anomaly score to anomaly probability
 #****************************************************************1.scalling**********************************
@@ -408,178 +380,207 @@ def regular_log(ascores):
     ascores: anomaly scores, which must be greater than zero, and finite.   '''
     smax=np.max(ascores)
     return -np.log(ascores/smax)
-#***************************************************************2.add distribution******************************
-def add_gaussian(ascore):
-    '''when ascore is 1-D size. '''
-    mean=np.mean(ascore)
-    var=np.var(ascore)
-    items=[]
-    for i in range(len(ascore)):
-        items.append( random.gauss(mean,var) )
-    items=np.asarray(items)
-    return items
 
-def add_gamma(ascore):
-    '''when ascore is 1-D size. '''
-    mean=np.mean(ascore)
-    var=np.var(ascore)
-    """Yields a list of random numbers following a gamma distribution defined by mean and variance"""
-    g_alpha = mean*mean/var
-    g_beta = mean/var
-    asdist=[]
-    #stats.gamma.rvs(g_alpha,size=mean.size) 
-    for i in range(len(ascore)):
-        asdist.append( random.gammavariate(g_alpha,1/g_beta)   )   
-    asdist=np.asarray(asdist)
-    return asdist
+###******************************************************** CDF ***********************************************
+# cdf() suit to known distribution
+def cdf_gaussian_1(ascores):
+    norm=stats.norm.cdf(ascores)
+    norm[np.where(norm<0)]=0
+    return norm   
 
-def add_triang(ascore):
-    '''when ascore is 1-D size. '''
-    mean=np.mean(ascore)  
-    items=stats.triang.rvs(mean,size=ascore.size) 
-    items=np.asarray(items)
-    return items
+def cdf_gamma(ascores):
+    mu_score=np.mean(ascores)
+    sigma_score=np.std(ascores)
+    kk=mu_score**2/ sigma_score**2
+    theta=sigma_score/ mu_score**2
+    norm= stats.gamma.cdf(ascores,a=kk, loc=mu_score, scale=sigma_score)
+    return norm
 
-def add_poisson(ascore):
-    '''when ascore is 1-D size. '''
-    mean=np.mean(ascore)  
-    items=stats.poisson.rvs(mean,size=ascore.size)     
-    items=np.asarray(items)
-    return items
+def cdf_triang(ascores):
+    mu_score=np.mean(ascores)
+    sigma_score=np.std(ascores)
+    norm= stats.triang.cdf(ascores,c=mu_score, loc=mu_score, scale=sigma_score)
+    norm=np.nan_to_num(norm)
+    norm[np.where(norm<0)]=0
+    return norm 
 
-def add_t(ascore):
-    '''when ascore is 1-D size. '''
-    mean=np.mean(ascore)  
-    items=stats.t.rvs(df=mean,size=ascore.size) 
-    items=np.asarray(items)
-    return items
+def cdf_poisson(ascores):
+    mu_score=np.mean(ascores)
+    #sigma_score=np.std(ascores)
+    norm= stats.poisson.cdf(ascores,mu=mu_score)    
+    norm[np.where(norm<0)]=0    
+    return norm 
 
-def add_uniform(ascore):
-    '''when ascore is 1-D size. '''
-    mean=np.mean(ascore)  
-    items=stats.uniform.rvs(mean,size=ascore.size) 
-    items=np.asarray(items)
-    return items
+def cdf_t(ascores):
+    mu_score=np.mean(ascores)
+    mu_std=np.std(ascores)
+    #sigma_score=np.var(ascores)
+    norm= stats.t.cdf(ascores,df=mu_score, loc=mu_score, scale=mu_std )                     
+    norm=np.nan_to_num(norm)   
+    norm[np.where(norm<0)]=0
+    return norm 
 
-## ********************************************************3. Normalization***************************************
+def cdf_uniform(ascores):
+    mu_score=np.mean(ascores)
+    sigma_score=np.std(ascores)
+    norm= stats.uniform.cdf(ascores,loc=mu_score, scale=sigma_score)        
+    norm=np.nan_to_num(norm)
+    norm[np.where(norm<0)]=0
+    return norm 
+
+
+def cdf_ECDF(ascores):
+    '''pure ecdf, no normalization. suit to unknown distribution, e.g. multi peaks distribution'''
+    norm=ECDF(ascores)
+    return norm (ascores)  
+
+## ******************************************************** Normalization***************************************
 # cdf() suit to known distribution
 def normalization_gaussian_1(ascores):
     ''' using cdf(mu)=0.5, cdf(max)=1 ,range of [0,1]'''
     norm=stats.norm.cdf(ascores)*2-1
-    #norm[np.where(norm<0)]=0
-    norm=np.absolute(norm)
+    norm[np.where(norm<0)]=0
+    #norm=np.absolute(norm)
     return norm   
 
 def normalization_gaussian_2(ascores):
-    ''' using cdf(),  origin range of [-1,1]; return range [0,1] after MinMaxScaler()'''
-    mu_score=np.mean(ascores)
-    sigma_score=np.var(ascores)
-    norm=stats.norm.cdf(ascores,mu_score,sigma_score)-stats.norm.cdf(mu_score,mu_score,sigma_score)/ (1-stats.norm.cdf(mu_score,mu_score,sigma_score))
-    norm=np.absolute(norm)
-    '''
-    t = MinMaxScaler()
-    t.fit(norm.reshape(-1,1))
-    norm = t.transform(norm.reshape(-1,1))
-    '''
-    return norm   # norm.reshape(1,-1)[0]
+    ''' using cdf(), customized Gaussian, origin range of [-1,1]; return range [0,1] after MinMaxScaler()'''  # have fixed, to be validate   
+    mean_score=np.mean(ascores)
+    sigma_score=np.std(ascores)
+    mu_cdf=stats.norm.cdf(np.mean(ascores),loc=mean_score, scale=sigma_score)   #  cdf( mean( score))
+    max_cdf=1    # stats.norm.cdf(np.max(ascores),loc=mean_score,scale=sigma_score)    
+    norm= (stats.norm.cdf(ascores, loc=mean_score, scale=sigma_score)-mu_cdf )/ ( max_cdf-mu_cdf)  
+    
+    norm[np.where(norm<0)]=0
+    if np.max(norm)>=1:
+        t = MinMaxScaler()
+        t.fit(norm.reshape(-1,1))
+        temp = t.transform(norm.reshape(-1,1))
+        norm=temp.reshape(1,-1)[0]
+        del temp
+    
+    return norm   # norm
 
 def normalization_gaussian_3(ascores):
-    ''' using erf(), origin range of [-1,1]; return range [0,1] after MinMaxScaler()'''
+    ''' using erf(), customized Gaussian, origin range of [-1,1]; return range [0,1] after MinMaxScaler()'''
     mu_score=np.mean(ascores)
-    sigma_score=np.var(ascores)
+    sigma_score=np.std(ascores)
     for i in range(0,len(ascores)):
-        norm=math.erf((ascores[i]-mu_score)/ (sigma_score*np.sqrt(2) ))
+        norm= ( 1+ math.erf((ascores[i]-mu_score)/ (sigma_score*np.sqrt(2) ))    )/2
         ascores[i]=norm
-    
-    t = MinMaxScaler()
-    t.fit(ascores.reshape(-1,1))
-    ascores = t.transform(ascores.reshape(-1,1))
-    return ascores.reshape(1,-1)[0] 
+    norm[np.where(norm<0)]=0
+    if np.max(norm)>=1:
+        t = MinMaxScaler()
+        t.fit(ascores.reshape(-1,1))
+        temp= t.transform(ascores.reshape(-1,1))
+        ascores=temp.reshape(1,-1)[0] 
+        del temp
+    return ascores
 
 def normalization_gaussian_custom(ascores, basescore):
-    ''' condition on basescore,  origin range of [-1,1]; return range [0,1] after MinMaxScaler()'''
+    ''' condition on basescore, using erf(), customized Gaussian,  origin range of [-1,1]; return range [0,1] after MinMaxScaler()'''   # hve changed, need to check the range.
     mu_score=basescore
     sigma_score=np.sqrt(np.mean(np.square(ascores-basescore)))
     for i in range(0,len(ascores)):
-        norm=math.erf((ascores[i]-mu_score)/ (sigma_score*np.sqrt(2) ))
+        norm=( 1+ math.erf((ascores[i]-mu_score)/ (sigma_score*np.sqrt(2) ))    )/2.0
         if norm<0:
-            norm=np.absolute(norm)
+            norm=0    #  np.absolute(norm)
         ascores[i]=norm
-    '''
-    t = MinMaxScaler()
-    t.fit(ascores.reshape(-1,1))
-    ascores = t.transform(ascores.reshape(-1,1))
-    '''
-    return ascores  # ascores.reshape(1,-1)[0]
+            
+    if np.max(norm)>=1:
+        t = MinMaxScaler()
+        t.fit(ascores.reshape(-1,1))
+        ascores = t.transform(ascores.reshape(-1,1))
+        ascores=ascores.reshape(1,-1)[0]
+    
+    return ascores  # 
     
 def normalization_gamma(ascores):
     ''' range of origin range of [-1,1]; return range [0,1] after MinMaxScaler()'''
     mu_score=np.mean(ascores)
-    sigma_score=np.var(ascores)
+    sigma_score=np.std(ascores)
     kk=mu_score**2/ sigma_score**2
     theta=sigma_score/ mu_score**2
     #norm= (stats.gamma.cdf(ascores,a=kk, loc=ascores/theta, scale=3)-stats.gamma.cdf(mu_score,a=kk, loc=ascores/theta,scale=3) )/ ( 1-stats.gamma.cdf(mu_score,a=kk, loc=ascores/theta,scale=3))   # scale=1
-    norm= (stats.gamma.cdf(ascores,a=kk, loc=0, scale=1)-stats.gamma.cdf(mu_score,a=kk, loc=0,scale=1) )/ ( 1-stats.gamma.cdf(mu_score,a=kk, loc=0,scale=1))   # scale=1
-    t = MinMaxScaler()
-    t.fit(norm.reshape(-1,1))
-    ascores = t.transform(norm.reshape(-1,1))
-    return norm.reshape(1,-1)[0]
+    norm= (stats.gamma.cdf(ascores,a=kk, loc=mu_score, scale=sigma_score)-stats.gamma.cdf(mu_score,a=kk, loc=mu_score,scale=sigma_score) )/ (1 -stats.gamma.cdf(mu_score,a=kk, loc=mu_score,scale=sigma_score))   # scale=1
+  #stats.gamma.cdf(np.max(ascores),a=kk,loc=mu_score,scale=sigma_score)  
+    norm[np.where(norm<0)]=0
+    if np.max(norm)>=1:
+        t = MinMaxScaler()
+        t.fit(norm.reshape(-1,1))
+        temp = t.transform(norm.reshape(-1,1))
+        norm=temp.reshape(1,-1)[0]
+        del temp
+    return norm
 
 def normalization_triang(ascores):
     #''' range of origin range of [-1,1]; return range [0,1] after MinMaxScaler()'''
     mu_score=np.mean(ascores)
-    #sigma_score=np.var(ascores)
-    norm= (stats.triang.cdf(ascores,c=mu_score, loc=0, scale=1)-stats.triang.cdf(mu_score,c=mu_score, loc=0,scale=1) )/ ( 1-stats.triang.cdf(mu_score,c=mu_score, loc=0,scale=1))       
+    sigma_score=np.std(ascores)
+    norm= (stats.triang.cdf(ascores,c=mu_score, loc=mu_score, scale=sigma_score)-stats.triang.cdf(mu_score,c=mu_score, loc=mu_score,scale=sigma_score) )/ (1-stats.triang.cdf(mu_score,c=mu_score, loc=mu_score,scale=sigma_score))         #stats.triang.cdf(np.max(ascores),c=mu_score,loc=mu_score,scale=sigma_score)
     norm=np.nan_to_num(norm)
-    norm=np.absolute(norm)
-    
-    t = MinMaxScaler()
-    t.fit(norm.reshape(-1,1))
-    norm = t.transform(norm.reshape(-1,1))
-    norm=np.squeeze(norm)
+    #norm=np.absolute(norm)
+    norm[np.where(norm<0)]=0
+    if np.max(norm)>=1:
+        t = MinMaxScaler()
+        t.fit(norm.reshape(-1,1))
+        norm = t.transform(norm.reshape(-1,1))
+        norm=np.squeeze(norm)
     
     return norm 
 
 def normalization_poisson(ascores):
     #''' range of origin range of [-1,1]; return range [0,1] after MinMaxScaler()'''
     mu_score=np.mean(ascores)
-    #sigma_score=np.var(ascores)
-    norm= (stats.poisson.cdf(ascores,mu=mu_score)-stats.poisson.cdf(mu_score,mu=mu_score) )/ ( 1-stats.poisson.cdf(mu_score,mu=mu_score))       
-    norm=np.absolute(norm)
+    #sigma_score=np.std(ascores)
+    norm= (stats.poisson.cdf(ascores,mu=mu_score)-stats.poisson.cdf(mu_score,mu=mu_score) )/ ( 1-stats.poisson.cdf(mu_score,mu=mu_score))   
+    # stats.poisson.cdf(np.max(ascores),mu=mu_score)
+    #norm=np.absolute(norm)
+    norm[np.where(norm<0)]=0
     
-    t = MinMaxScaler()
-    t.fit(norm.reshape(-1,1))
-    norm = t.transform(norm.reshape(-1,1))    
-    norm=np.squeeze(norm)
+    if np.max(norm)>=1:
+        t = MinMaxScaler()
+        t.fit(norm.reshape(-1,1))
+        norm = t.transform(norm.reshape(-1,1))
+        norm=np.squeeze(norm)
+    
     return norm 
 
 def normalization_t(ascores):
     #''' range of origin range of [-1,1]; return range [0,1] after MinMaxScaler()'''
     mu_score=np.mean(ascores)
+    mu_std=np.std(ascores)
     #sigma_score=np.var(ascores)
-    norm= (stats.t.cdf(ascores,df=mu_score, loc=0, scale=1)-stats.t.cdf(mu_score,df=mu_score, loc=0,scale=1) )/ ( 1-stats.t.cdf(mu_score,df=mu_score, loc=0,scale=1))    
+    norm= (stats.t.cdf(ascores,df=mu_score, loc=mu_score, scale=mu_std)-stats.t.cdf(mu_score,df=mu_score, loc=mu_score,scale=mu_std) )/ ( 1-stats.t.cdf(mu_score,df=mu_score, loc=mu_score,scale=mu_std))    
+    # stats.t.cdf(np.max(ascores),df=mu_score,loc=mu_score,scale=mu_std)
     norm=np.nan_to_num(norm)   
-    norm=np.absolute(norm)
+#     norm=np.absolute(norm)
     
-    t = MinMaxScaler()
-    t.fit(norm.reshape(-1,1))
-    norm = t.transform(norm.reshape(-1,1))
-    norm=np.squeeze(norm)
+    norm[np.where(norm<0)]=0
+    if np.max(norm)>=1:
+        t = MinMaxScaler()
+        t.fit(norm.reshape(-1,1))
+        norm = t.transform(norm.reshape(-1,1))
+        norm=np.squeeze(norm)
     
     return norm 
 
 def normalization_uniform(ascores):
     #''' range of origin range of [-1,1]; return range [0,1] after MinMaxScaler()'''
     mu_score=np.mean(ascores)
-    #sigma_score=np.var(ascores)
-    norm= (stats.uniform.cdf(ascores,loc=0, scale=1)-stats.uniform.cdf(mu_score, loc=0,scale=1) )/ ( 1-stats.uniform.cdf(mu_score, loc=0,scale=1))         
+    sigma_score=np.std(ascores)
+    norm= (stats.uniform.cdf(ascores,loc=mu_score, scale=sigma_score)-stats.uniform.cdf(mu_score, loc=mu_score,scale=sigma_score) )/ ( 1-stats.uniform.cdf(mu_score, loc=mu_score,scale=sigma_score))         
+    # stats.uniform.cdf(np.max(ascores),loc=mu_score,scale=sigma_score)
     norm=np.nan_to_num(norm)
-    norm=np.absolute(norm)
+#     norm=np.absolute(norm)
     
-    t = MinMaxScaler()
-    t.fit(norm.reshape(-1,1))
-    norm = t.transform(norm.reshape(-1,1))    
-    norm=np.squeeze(norm)
+    norm[np.where(norm<0)]=0
+    if np.max(norm)>=1:
+        t = MinMaxScaler()
+        t.fit(norm.reshape(-1,1))
+        norm = t.transform(norm.reshape(-1,1))
+        norm=np.squeeze(norm)
+    
     return norm 
 
 
@@ -588,46 +589,19 @@ def normalization_ECDF(ascores):
     norm=ECDF(ascores)
     return norm (ascores)  
 
-def normalization_ECDF_2(ascores):
+def normalization_ECDF(ascores):
     ''' normalization using ecdf(),  '''
     mu_score=np.mean(ascores)
     norm=ECDF(ascores)
-    norm=norm(ascores)-norm(mu_score)/ (1-norm(mu_score))
-    norm=np.absolute(norm)
+    norm=(norm(ascores)-norm(mu_score)) / (1-norm(mu_score))         # norm(np.max(ascores))
+    #norm=np.absolute(norm)
+    norm[np.where(norm<0)]=0
     return norm
 
-def normalization_ECOD(ascores):
-    ''' normalization using ecod() from github,  '''
-    singledim=False
-    if ascores.ndim==1:
-        ascores=ascores.reshape(-1,1)
-        singledim=True
-    # train an ECOD detector
-    clf = ECOD()
-    clf.fit(ascores)
-    # get outlier scores
-    ecodscore=clf.decision_scores_  # raw outlier scores on the train data
-    #if singledim==True:
-    #    ecodscore=ecodscore.reshape(1,-1)
-    return ecodscore
-
-    #y_test_scores = clf.decision_function(X_test)  # predict raw outlier scores on test
-    '''
-    @article{zhao2019pyod,
-      author  = {Zhao, Yue and Nasrullah, Zain and Li, Zheng},
-      title   = {PyOD: A Python Toolbox for Scalable Outlier Detection},
-      journal = {Journal of Machine Learning Research},
-      year    = {2019},
-      volume  = {20},
-      number  = {96},
-      pages   = {1-7},
-      url     = {http://jmlr.org/papers/v20/19-011.html}
-    }
-    '''
 #**********************************************************************************************************************************
 
 
-def plot_UQ_density(alea,epis,thres):
+def plot_UQ_density(alea,epis,thres, name='epis_vs_alea'):
     ''' plot density of larger alea than thres '''
     print('aleatoric mean: ', np.mean(alea))
     print('epistemic mean: ', np.mean(epis))
@@ -648,7 +622,7 @@ def plot_UQ_density(alea,epis,thres):
                 ax.set_ylabel('Epistemic', fontsize = 10)
                 #ax.set_xlim(np.min(alea[alea_index])-0.05, np.max(alea[alea_index])+0.05)  
                 #ax.set_ylim(np.min(epis[alea_index])-0.05, np.max(epis[alea_index])+0.05)  
-                #pyplot.savefig('./fig/epis_vs_alea.pdf')
+                pyplot.savefig('./figs/'+name+'.png') #'.pdf')  #.png
             except Exception as e:
                 print(e)
                 pyplot.hist(alea[alea_index])
@@ -693,34 +667,7 @@ def predict_UQ(predmodel,testdata,T, uqname='Kwon'):
         aleatoric , epistemic = UQ_ale_epi_Kendall(test_mu,test_std)
         
     return test_mu,test_std,test_recon, aleatoric, epistemic
-'''
-    if uqname=='Kwon':
-        aleatoric , epistemic = UQ_ale_epi_Kwon(test_recon)
-    elif uqname=='Kendall':
-        aleatoric , epistemic = UQ_ale_epi_Kendall(test_mu,test_std)
 
-    alea_list.append(aleatoric)
-    epis_list.append(epistemic)
-
-print('aleatoric: ', np.mean(alea_list), np.std(alea_list))
-print('epistemic: ', np.mean(epis_list), np.std(epis_list)) 
-
-alea_single=alea_list[0]
-for i in range(1,len(alea_list)):
-    alea_single+=alea_list[i]
-alea_single=alea_single/len(alea_list)
-
-epis_single=epis_list[0]
-for i in range(1,len(epis_list)):
-    epis_single+=epis_list[i]
-epis_single=epis_single/len(epis_list)
-
-# why uncertainty <0 ?
-alea_single[np.where(alea_single<0)]=1
-epis_single[np.where(epis_single<0)]=1
-
-return mu_recon/T, std_recon/T,y_recon/T, alea_single, epis_single
-'''
 def get_error_term(v1,v2, _rmse=True):
     if _rmse:
         return np.sqrt(np.mean((v1-v2)**2,axis=1))
